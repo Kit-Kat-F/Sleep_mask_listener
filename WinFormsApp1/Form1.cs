@@ -6,6 +6,8 @@ using System.Drawing;
 using System.IO;
 using System.Windows.Forms;
 using NAudio.Wave;
+using NWaves.Transforms;
+using NWaves.Windows;
 
 namespace WinFormsApp1
 {
@@ -13,23 +15,43 @@ namespace WinFormsApp1
     {
         private class CalibrationState
         {
-            public List<float> Samples { get; } = new List<float>();
             public bool IsCalibrating { get; set; } = false;
             public DateTime StartTime { get; set; }
             public int DurationMs { get; set; } = 3000;
-            public float Baseline { get; private set; } = 0f;
+            public float[] NoiseProfile { get; private set; } = null;
+            public List<float[]> FftFrames { get; } = new List<float[]>();
+            public float VolumeBaseline { get; private set; } = 0f;
+            public float[] FftBuffer { get; } = new float[1024];
+            public int FftBufferIndex { get; set; } = 0;
+
+            private List<float> _volumeSamples = new List<float>();
+
+            public bool IsCalibrated => NoiseProfile != null;
+
+            public void AddVolumeSample(float volume) => _volumeSamples.Add(volume);
 
             public void Complete()
             {
-                Baseline = Samples.Average();
+                int binCount = FftFrames[0].Length;
+                NoiseProfile = new float[binCount];
+                foreach (var frame in FftFrames)
+                    for (int i = 0; i < binCount; i++)
+                        NoiseProfile[i] += frame[i];
+                for (int i = 0; i < binCount; i++)
+                    NoiseProfile[i] /= FftFrames.Count;
+
+                VolumeBaseline = _volumeSamples.Average();
                 IsCalibrating = false;
             }
 
             public void Reset()
             {
-                Samples.Clear();
                 IsCalibrating = false;
-                Baseline = 0f;
+                NoiseProfile = null;
+                FftFrames.Clear();
+                VolumeBaseline = 0f;
+                FftBufferIndex = 0;
+                _volumeSamples.Clear();
             }
         }
 
@@ -39,18 +61,17 @@ namespace WinFormsApp1
             public bool IsCapturing { get; set; } = false;
             public DateTime LastNoiseTime { get; set; }
             public int SilenceTimeoutMs { get; set; } = 2000;
-    
-            public DateTime? NoiseStart { get; set; } = null; // when did current noise begin
-            public int MinimumNoiseDurationMs { get; set; } = 500; // must last 500ms to count
+            public DateTime? NoiseStart { get; set; } = null;
+            public int MinimumNoiseDurationMs { get; set; } = 500;
         }
 
-        private const string DefaultFilePath = "C:\\Users\\myles\\Music\\sleep recordings";
-        
+        private const string DefaultFilePath = "";
+        private const int FftSize = 1024;
+
         private WaveInEvent _waveIn;
-        
         private CalibrationState _calibration = new CalibrationState();
         private ClipState _clip = new ClipState();
-        
+
         private Button _startRecordingButton;
         private Button _stopRecordingButton;
         private Button _viewRecordingsButton;
@@ -125,76 +146,6 @@ namespace WinFormsApp1
             _waveIn.StartRecording();
         }
 
-        private void OnDataAvailable(object sender, WaveInEventArgs e)
-        {
-            var volume = GetVolume(e.Buffer, e.BytesRecorded);
-
-            if (_calibration.IsCalibrating)
-            {
-                Calibrate(volume);
-                return;
-            }
-
-            double threshold = 0;
-            if (_calibration.Baseline < 0.0400)
-            {
-                 threshold = 0.0400 * 1.5f;
-            }
-            else
-            {
-                threshold = _calibration.Baseline * 1.5f;
-            }
-
-            if (volume > threshold)
-            {
-                CheckThreshold(e, volume);
-            }
-            else if (_clip.IsCapturing)
-            {
-                _clip.Writer?.Write(e.Buffer, 0, e.BytesRecorded);
-
-                if ((DateTime.Now - _clip.LastNoiseTime).TotalMilliseconds >= _clip.SilenceTimeoutMs)
-                    StopClip();
-            }
-            else
-            {
-                _clip.NoiseStart = null; // reset if volume dropped below threshold
-            }
-        }
-
-        private void CheckThreshold(WaveInEventArgs e, float volume)
-        {
-            if (_clip.NoiseStart == null)
-            {
-                _clip.NoiseStart = DateTime.Now;
-            }
-
-            var noiseLongEnough = (DateTime.Now - _clip.NoiseStart.Value).TotalMilliseconds >= _clip.MinimumNoiseDurationMs;
-
-            if (!noiseLongEnough)
-                return;
-
-            Console.WriteLine($"Noise detected! Volume: {volume:F4} Baseline: {_calibration.Baseline:F4}");
-            _clip.LastNoiseTime = DateTime.Now;
-
-            if (!_clip.IsCapturing)
-            {
-                _clip.IsCapturing = true;
-                StartClip();
-            }
-
-            _clip.Writer.Write(e.Buffer, 0, e.BytesRecorded);
-        }
-
-        private void Calibrate(float volume)
-        {
-            _calibration.Samples.Add(volume);
-            if (!((DateTime.Now - _calibration.StartTime).TotalMilliseconds >= _calibration.DurationMs)) return;
-            _calibration.Complete();
-            _startRecordingButton.Invoke((MethodInvoker)(() => _startRecordingButton.Text = "Recording..."));
-            Console.WriteLine($"Calibration done. Baseline: {_calibration.Baseline:F4}");
-        }
-
         private void StartClip()
         {
             if (!Directory.Exists(DefaultFilePath))
@@ -215,16 +166,186 @@ namespace WinFormsApp1
             Console.WriteLine("Clip saved.");
         }
 
-        private static float GetVolume(byte[] buffer, int bytesRecorded)
+        private float[] ProcessAudio(float[] samples)
+        {
+            if (!_calibration.IsCalibrated)
+                return samples;
+
+            var sampleCount = samples.Length;
+            var outputSamples = new float[sampleCount];
+            var windowSum = new float[sampleCount];
+            var hopSize = FftSize / 2;
+
+            var window = Window.OfType(WindowType.Hann, FftSize);
+
+            for (int i = 0; i + FftSize <= sampleCount; i += hopSize)
+            {
+                var real = new float[FftSize];
+                var imag = new float[FftSize];
+                var output = new float[FftSize];
+
+                for (int j = 0; j < FftSize; j++)
+                    real[j] = samples[i + j] * window[j];
+
+                var fft = new RealFft(FftSize);
+                fft.Direct(real, real, imag);
+
+                var subtractionStrength = 0.7f;
+                var spectralFloor = 0.1f;
+
+                for (var j = 0; j < FftSize / 2; j++)
+                {
+                    var magnitude = (float)Math.Sqrt(real[j] * real[j] + imag[j] * imag[j]);
+                    var noiseMagnitude = _calibration.NoiseProfile[j] * subtractionStrength;
+                    var cleanedMagnitude = Math.Max(magnitude * spectralFloor, magnitude - noiseMagnitude);
+                    var scale = magnitude > 0 ? cleanedMagnitude / magnitude : 0;
+                    real[j] *= scale;
+                    imag[j] *= scale;
+                }
+
+                fft.Inverse(real, imag, output);
+
+                for (var j = 0; j < FftSize && i + j < sampleCount; j++)
+                {
+                    outputSamples[i + j] += (output[j] / FftSize) * window[j];
+                    windowSum[i + j] += window[j] * window[j];
+                }
+            }
+
+            for (var i = 0; i < sampleCount; i++)
+            {
+                if (windowSum[i] > 0.0001f)
+                    outputSamples[i] /= windowSum[i];
+                else
+                    outputSamples[i] = samples[i];
+            }
+
+            return outputSamples;
+        }
+
+        private void OnDataAvailable(object sender, WaveInEventArgs e)
+        {
+            if (_calibration.IsCalibrating)
+            {
+                Calibrate(e.Buffer, e.BytesRecorded);
+                return;
+            }
+
+            // use RAW samples for volume/threshold detection
+            float[] rawSamples = BufferToSamples(e.Buffer, e.BytesRecorded);
+            var volume = GetVolumeFromSamples(rawSamples);
+            var threshold = Math.Max(0.04f, _calibration.VolumeBaseline * 1.5f);
+
+            // use CLEANED samples for writing to file
+            float[] cleanedSamples = ProcessAudio(rawSamples);
+            byte[] cleanedBytes = SamplesToBytes(cleanedSamples);
+
+            if (volume > threshold)
+                CheckThreshold(cleanedBytes, volume);
+            else if (_clip.IsCapturing)
+            {
+                _clip.Writer?.Write(cleanedBytes, 0, cleanedBytes.Length);
+                if ((DateTime.Now - _clip.LastNoiseTime).TotalMilliseconds >= _clip.SilenceTimeoutMs)
+                    StopClip();
+            }
+            else
+            {
+                _clip.NoiseStart = null;
+            }
+        }
+
+        private void CheckThreshold(byte[] cleanedBytes, float volume)
+        {
+            if (_clip.NoiseStart == null)
+                _clip.NoiseStart = DateTime.Now;
+
+            var noiseLongEnough = (DateTime.Now - _clip.NoiseStart.Value).TotalMilliseconds >= _clip.MinimumNoiseDurationMs;
+
+            if (!noiseLongEnough)
+                return;
+
+            Console.WriteLine($"Noise detected! Volume: {volume:F4} Baseline: {_calibration.VolumeBaseline:F4}");
+            _clip.LastNoiseTime = DateTime.Now;
+
+            if (!_clip.IsCapturing)
+            {
+                _clip.IsCapturing = true;
+                StartClip();
+            }
+
+            _clip.Writer.Write(cleanedBytes, 0, cleanedBytes.Length);
+        }
+
+        private void Calibrate(byte[] buffer, int bytesRecorded)
+        {
+            var samples = BufferToSamples(buffer, bytesRecorded);
+            _calibration.AddVolumeSample(GetVolumeFromSamples(samples));
+
+            for (var i = 0; i < samples.Length; i++)
+            {
+                _calibration.FftBuffer[_calibration.FftBufferIndex++] = samples[i];
+                if (_calibration.FftBufferIndex >= FftSize)
+                {
+                    _calibration.FftBufferIndex = 0;
+                    _calibration.FftFrames.Add(ComputeFftMagnitudes(_calibration.FftBuffer));
+                }
+            }
+
+            if ((DateTime.Now - _calibration.StartTime).TotalMilliseconds >= _calibration.DurationMs)
+            {
+                _calibration.Complete();
+                _startRecordingButton.Invoke((MethodInvoker)(() => _startRecordingButton.Text = "Recording..."));
+                Console.WriteLine($"Calibration done. Baseline volume: {_calibration.VolumeBaseline:F4}");
+            }
+        }
+
+        private float[] ComputeFftMagnitudes(float[] samples)
+        {
+            var window = Window.OfType(WindowType.Hann, FftSize);
+            var real = samples.ToArray();
+            for (var i = 0; i < FftSize; i++)
+                real[i] *= window[i];
+
+            var imag = new float[FftSize];
+            var fft = new RealFft(FftSize);
+            fft.Direct(real, real, imag);
+
+            var magnitudes = new float[FftSize / 2];
+            for (var i = 0; i < FftSize / 2; i++)
+                magnitudes[i] = (float)Math.Sqrt(real[i] * real[i] + imag[i] * imag[i]);
+
+            return magnitudes;
+        }
+
+        private float[] BufferToSamples(byte[] buffer, int bytesRecorded)
+        {
+            int sampleCount = bytesRecorded / 2;
+            var samples = new float[sampleCount];
+            for (int i = 0; i < sampleCount; i++)
+                samples[i] = BitConverter.ToInt16(buffer, i * 2) / 32768f;
+            return samples;
+        }
+
+        private float GetVolumeFromSamples(float[] samples)
         {
             var max = 0f;
-            for (var i = 0; i < bytesRecorded; i += 2)
+            foreach (var s in samples)
             {
-                var sample = BitConverter.ToInt16(buffer, i);
-                var abs = Math.Abs(sample / 32768f);
+                var abs = Math.Abs(s);
                 if (abs > max) max = abs;
             }
             return max;
+        }
+
+        private byte[] SamplesToBytes(float[] samples)
+        {
+            var bytes = new byte[samples.Length * 2];
+            for (var i = 0; i < samples.Length; i++)
+            {
+                var s = (short)Math.Max(short.MinValue, Math.Min(short.MaxValue, samples[i] * 32768f));
+                BitConverter.GetBytes(s).CopyTo(bytes, i * 2);
+            }
+            return bytes;
         }
     }
 }
