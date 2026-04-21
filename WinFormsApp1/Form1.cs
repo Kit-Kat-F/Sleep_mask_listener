@@ -39,6 +39,9 @@ namespace WinFormsApp1
             public bool IsCapturing { get; set; } = false;
             public DateTime LastNoiseTime { get; set; }
             public int SilenceTimeoutMs { get; set; } = 2000;
+    
+            public DateTime? NoiseStart { get; set; } = null; // when did current noise begin
+            public int MinimumNoiseDurationMs { get; set; } = 500; // must last 500ms to count
         }
 
         private const string DefaultFilePath = "C:\\Users\\myles\\Music\\sleep recordings";
@@ -153,10 +156,24 @@ namespace WinFormsApp1
                 if ((DateTime.Now - _clip.LastNoiseTime).TotalMilliseconds >= _clip.SilenceTimeoutMs)
                     StopClip();
             }
+            else
+            {
+                _clip.NoiseStart = null; // reset if volume dropped below threshold
+            }
         }
 
         private void CheckThreshold(WaveInEventArgs e, float volume)
         {
+            if (_clip.NoiseStart == null)
+            {
+                _clip.NoiseStart = DateTime.Now;
+            }
+
+            var noiseLongEnough = (DateTime.Now - _clip.NoiseStart.Value).TotalMilliseconds >= _clip.MinimumNoiseDurationMs;
+
+            if (!noiseLongEnough)
+                return;
+
             Console.WriteLine($"Noise detected! Volume: {volume:F4} Baseline: {_calibration.Baseline:F4}");
             _clip.LastNoiseTime = DateTime.Now;
 
