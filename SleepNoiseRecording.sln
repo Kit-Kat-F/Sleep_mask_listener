@@ -2,6 +2,11 @@
 Microsoft Visual Studio Solution File, Format Version 12.00
 Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "WinFormsApp1", "WinFormsApp1\WinFormsApp1.csproj", "{5B8DB4AC-C2D6-4BFF-A553-63DAAB5128C8}"
 EndProject
+Project("{2150E333-8FDC-42A3-9474-1A3956D46DE8}") = "assets", "assets", "{0ECEDC87-3882-4907-A6E1-C39DEE373BC7}"
+	ProjectSection(SolutionItems) = preProject
+		..\..\Downloads\NeonPink_ArcadeUI_Pack\Buttons\Large\empty_large_pressed.png = ..\..\Downloads\NeonPink_ArcadeUI_Pack\Buttons\Large\empty_large_pressed.png
+	EndProjectSection
+EndProject
 Global
 	GlobalSection(SolutionConfigurationPlatforms) = preSolution
 		Debug|Any CPU = Debug|Any CPU

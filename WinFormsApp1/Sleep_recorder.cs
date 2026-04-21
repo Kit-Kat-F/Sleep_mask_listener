@@ -11,7 +11,7 @@ using NWaves.Windows;
 
 namespace WinFormsApp1
 {
-    public partial class Form1 : Form
+    public partial class Sleep_recorder : Form
     {
         private class CalibrationState
         {
@@ -76,32 +76,52 @@ namespace WinFormsApp1
         private Button _stopRecordingButton;
         private Button _viewRecordingsButton;
 
-        public Form1()
+        public Sleep_recorder()
         {
             InitializeComponent();
             InitialiseFormLayout();
+        }
+        
+        private void StyleButton(Button button)
+        {
+            BackgroundImage = Image.FromFile("sleepykitten.png");
+            BackgroundImageLayout = ImageLayout.Zoom; // or Tile, Center, Zoom
+            
+            
+            button.BackgroundImage = Image.FromFile(".\\empty_large_normal.png");
+            button.BackgroundImageLayout = ImageLayout.Stretch;
+            button.FlatStyle = FlatStyle.Flat;
+            button.FlatAppearance.BorderSize = 0;
+            button.FlatAppearance.MouseOverBackColor = Color.Transparent;
+            button.FlatAppearance.MouseDownBackColor = Color.Transparent;
+            button.BackColor = Color.Transparent;
+            button.Text = "";
+            button.Cursor = Cursors.Hand;
         }
 
         private void InitialiseFormLayout()
         {
             _startRecordingButton = new Button();
+            StyleButton(_startRecordingButton);
             _startRecordingButton.Text = "Start Recording";
-            _startRecordingButton.Location = new Point(50, 50);
-            _startRecordingButton.Size = new Size(500, 40);
+            _startRecordingButton.Location = new Point(50, 400);
+            _startRecordingButton.Size = new Size(250, 40);
             _startRecordingButton.Click += StartRecordingButton_Click;
             Controls.Add(_startRecordingButton);
 
             _stopRecordingButton = new Button();
+            StyleButton(_stopRecordingButton);
             _stopRecordingButton.Text = "Stop Recording";
-            _stopRecordingButton.Location = new Point(600, 50);
-            _stopRecordingButton.Size = new Size(500, 40);
+            _stopRecordingButton.Location = new Point(350, 400);
+            _stopRecordingButton.Size = new Size(250, 40);
             _stopRecordingButton.Click += StopRecordingButton_Click;
             Controls.Add(_stopRecordingButton);
 
             _viewRecordingsButton = new Button();
+            StyleButton(_viewRecordingsButton);
             _viewRecordingsButton.Text = "View Recordings";
-            _viewRecordingsButton.Location = new Point(1150, 50);
-            _viewRecordingsButton.Size = new Size(500, 40);
+            _viewRecordingsButton.Location = new Point(650, 400);
+            _viewRecordingsButton.Size = new Size(250, 40);
             _viewRecordingsButton.Click += ViewRecordingsButton_Click;
             Controls.Add(_viewRecordingsButton);
         }

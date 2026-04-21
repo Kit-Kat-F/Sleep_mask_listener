@@ -11,4 +11,14 @@
       <PackageReference Include="NWaves" Version="0.9.6" />
     </ItemGroup>
 
+    <ItemGroup>
+      <None Include="bin\Debug\net5.0-windows\empty_large_hover.png" />
+      <None Include="bin\Debug\net5.0-windows\empty_large_normal.png" />
+      <None Include="bin\Debug\net5.0-windows\empty_large_pressed.png" />
+    </ItemGroup>
+
+    <ItemGroup>
+      <Content Include="bin\Debug\net5.0-windows\sleepykitten.png" />
+    </ItemGroup>
+
 </Project>
